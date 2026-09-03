@@ -1,0 +1,37 @@
+<Window x:Class="DataComparison.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="連線設定" Height="260" Width="380"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="100"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Label Grid.Row="0" Grid.Column="0" Content="服務器名稱" VerticalAlignment="Center"/>
+        <TextBox x:Name="ServerNameTextBox" Grid.Row="0" Grid.Column="1" Margin="0,4" Padding="4" VerticalContentAlignment="Center"/>
+
+        <Label Grid.Row="1" Grid.Column="0" Content="資料庫名稱" VerticalAlignment="Center"/>
+        <TextBox x:Name="DatabaseNameTextBox" Grid.Row="1" Grid.Column="1" Margin="0,4" Padding="4" VerticalContentAlignment="Center"/>
+
+        <Label Grid.Row="2" Grid.Column="0" Content="登錄用戶" VerticalAlignment="Center"/>
+        <TextBox x:Name="UserIdTextBox" Grid.Row="2" Grid.Column="1" Margin="0,4" Padding="4" VerticalContentAlignment="Center"/>
+
+        <Label Grid.Row="3" Grid.Column="0" Content="登錄密碼" VerticalAlignment="Center"/>
+        <PasswordBox x:Name="LoginPasswordBox" Grid.Row="3" Grid.Column="1" Margin="0,4" Padding="4" VerticalContentAlignment="Center"/>
+
+        <Button x:Name="ConfirmButton" Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2"
+                Content="確認" Width="100" Height="30" HorizontalAlignment="Center" Margin="0,12,0,0"
+                Click="ConfirmButton_Click"/>
+    </Grid>
+</Window>
