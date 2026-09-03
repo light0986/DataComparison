@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Data;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using DataComparison.SQLserver;
@@ -20,6 +22,10 @@ namespace DataComparison.Fragment
         private const string QueryButtonDefaultText = "查詢";
         private const int MaxResultEntries = 10;
         private const int MaxCheckedEntries = 2;
+        private const int MinTopCount = 1;
+        private const int MaxTopCount = 1000;
+        private const int DefaultTopCount = 100;
+        private const int QueryTimeoutSeconds = 30;
 
         private static readonly HashSet<string> NumericDataTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -32,6 +38,7 @@ namespace DataComparison.Fragment
         private readonly List<ResultEntry> _resultEntries = new List<ResultEntry>();
 
         private readonly SqlServerConnectionInfo _connectionInfo;
+        private readonly DataComparisonWindow _ownerWindow;
         private List<string> _allTableNames = new List<string>();
         private List<string> _currentTableColumns = new List<string>();
         private Dictionary<string, string> _currentTableColumnTypes = new Dictionary<string, string>();
@@ -41,6 +48,9 @@ namespace DataComparison.Fragment
         private DispatcherTimer _queryCooldownTimer;
         private int _queryCooldownSecondsRemaining;
 
+        private DispatcherTimer _queryElapsedTimer;
+        private int _queryElapsedSeconds;
+
         public event EventHandler SelectedTableChanged;
 
         public string SelectedTableName
@@ -48,10 +58,11 @@ namespace DataComparison.Fragment
             get { return _selectedTableName; }
         }
 
-        public ComparisonTabContent(SqlServerConnectionInfo connectionInfo)
+        public ComparisonTabContent(SqlServerConnectionInfo connectionInfo, DataComparisonWindow ownerWindow)
         {
             InitializeComponent();
             _connectionInfo = connectionInfo;
+            _ownerWindow = ownerWindow;
 
             var savedFilter = QueryFilterRepository.Load();
             if (savedFilter != null)
@@ -74,26 +85,73 @@ namespace DataComparison.Fragment
             RefreshColumnButtons(ColumnFilterTextBox.Text.Trim());
         }
 
+        private void TopCountTextBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
+        {
+            e.Handled = !e.Text.All(char.IsDigit);
+        }
+
+        private void TopCountTextBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            GetTopCount();
+        }
+
+        /// <summary>
+        /// 讀取「select top」欄位目前的值,限制在 1~1000 之間(非數字或超出範圍時修正為
+        /// 邊界值/預設值 100),並把修正後的結果寫回輸入框讓使用者看到實際套用的數字。
+        /// </summary>
+        private int GetTopCount()
+        {
+            int value;
+            if (!int.TryParse(TopCountTextBox.Text.Trim(), out value))
+            {
+                value = DefaultTopCount;
+            }
+
+            if (value < MinTopCount)
+            {
+                value = MinTopCount;
+            }
+            else if (value > MaxTopCount)
+            {
+                value = MaxTopCount;
+            }
+
+            TopCountTextBox.Text = value.ToString();
+            return value;
+        }
+
         private void LoadTableNames()
         {
-            try
+            ShowQueryMask();
+
+            var worker = new BackgroundWorker();
+            worker.DoWork += (s, e) =>
             {
                 using (var helper = new SqlServerConnectionHelper(_connectionInfo))
                 {
-                    var table = helper.ExecuteQuery(
-                        "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME");
+                    var table = helper.ExecuteQueryWithTimeout(
+                        "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME",
+                        QueryTimeoutSeconds);
 
-                    _allTableNames = table.Rows.Cast<DataRow>()
+                    e.Result = table.Rows.Cast<DataRow>()
                         .Select(row => row["TABLE_NAME"].ToString())
                         .ToList();
                 }
-
-                RefreshTableListBox(string.Empty);
-            }
-            catch (Exception ex)
+            };
+            worker.RunWorkerCompleted += (s, e) =>
             {
-                MessageBox.Show("讀取資料表清單失敗:" + ex.Message, "資料比對", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+                HideQueryMask();
+
+                if (e.Error != null)
+                {
+                    MessageBox.Show("讀取資料表清單失敗:" + e.Error.Message, "資料比對", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+
+                _allTableNames = (List<string>)e.Result;
+                RefreshTableListBox(string.Empty);
+            };
+            worker.RunWorkerAsync();
         }
 
         private void RefreshTableListBox(string filterText)
@@ -145,42 +203,66 @@ namespace DataComparison.Fragment
 
         private void LoadColumnsForSelectedTable()
         {
-            try
+            var tableName = _selectedTableName;
+
+            ShowQueryMask();
+
+            var worker = new BackgroundWorker();
+            worker.DoWork += (s, e) =>
             {
                 using (var helper = new SqlServerConnectionHelper(_connectionInfo))
                 {
-                    var parameter = new SqlParameter("@tableName", _selectedTableName);
-                    var table = helper.ExecuteQuery(
+                    var parameter = new SqlParameter("@tableName", tableName);
+                    var table = helper.ExecuteQueryWithTimeout(
                         "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME=@tableName ORDER BY ORDINAL_POSITION",
-                        parameter);
+                        QueryTimeoutSeconds, parameter);
 
-                    _currentTableColumns = table.Rows.Cast<DataRow>()
+                    var columns = table.Rows.Cast<DataRow>()
                         .Select(row => row["COLUMN_NAME"].ToString())
                         .ToList();
 
-                    _currentTableColumnTypes = table.Rows.Cast<DataRow>()
+                    var columnTypes = table.Rows.Cast<DataRow>()
                         .ToDictionary(row => row["COLUMN_NAME"].ToString(), row => row["DATA_TYPE"].ToString());
 
-                    var pkParameter = new SqlParameter("@tableName", _selectedTableName);
-                    var pkTable = helper.ExecuteQuery(
+                    var pkParameter = new SqlParameter("@tableName", tableName);
+                    var pkTable = helper.ExecuteQueryWithTimeout(
                         "SELECT kcu.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc " +
                         "JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu " +
                         "ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_NAME = kcu.TABLE_NAME " +
                         "WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' AND tc.TABLE_NAME = @tableName " +
                         "ORDER BY kcu.ORDINAL_POSITION",
-                        pkParameter);
+                        QueryTimeoutSeconds, pkParameter);
 
-                    _currentTablePrimaryKeyColumns = pkTable.Rows.Cast<DataRow>()
+                    var primaryKeyColumns = pkTable.Rows.Cast<DataRow>()
                         .Select(row => row["COLUMN_NAME"].ToString())
                         .ToList();
+
+                    e.Result = new ColumnLoadResult
+                    {
+                        Columns = columns,
+                        ColumnTypes = columnTypes,
+                        PrimaryKeyColumns = primaryKeyColumns
+                    };
+                }
+            };
+            worker.RunWorkerCompleted += (s, e) =>
+            {
+                HideQueryMask();
+
+                if (e.Error != null)
+                {
+                    MessageBox.Show("讀取欄位清單失敗:" + e.Error.Message, "資料比對", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
                 }
 
+                var result = (ColumnLoadResult)e.Result;
+                _currentTableColumns = result.Columns;
+                _currentTableColumnTypes = result.ColumnTypes;
+                _currentTablePrimaryKeyColumns = result.PrimaryKeyColumns;
+
                 RefreshColumnButtons(string.Empty);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("讀取欄位清單失敗:" + ex.Message, "資料比對", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+            };
+            worker.RunWorkerAsync();
         }
 
         private void RefreshColumnButtons(string filterText)
@@ -287,28 +369,102 @@ namespace DataComparison.Fragment
                 conditions.Add(string.Format("({0})", whereText));
             }
 
+            var topCount = GetTopCount();
             var combinedWhere = string.Join(" and ", conditions);
             var sql = string.IsNullOrEmpty(combinedWhere)
-                ? string.Format("SELECT * FROM {0}", _selectedTableName)
-                : string.Format("SELECT * FROM {0} WHERE {1}", _selectedTableName, combinedWhere);
+                ? string.Format("SELECT TOP {0} * FROM {1}", topCount, _selectedTableName)
+                : string.Format("SELECT TOP {0} * FROM {1} WHERE {2}", topCount, _selectedTableName, combinedWhere);
 
             QueryFilterRepository.Save(compId, subCompId);
 
-            try
+            QueryButton.IsEnabled = false;
+            ShowQueryMask();
+
+            var worker = new BackgroundWorker();
+            worker.DoWork += (s, e) =>
             {
                 using (var helper = new SqlServerConnectionHelper(_connectionInfo))
                 {
-                    var table = helper.ExecuteQuery(sql);
-                    AddResultDataGrid(table);
+                    e.Result = helper.ExecuteQueryWithTimeout(sql, QueryTimeoutSeconds);
                 }
-            }
-            catch (Exception ex)
+            };
+            worker.RunWorkerCompleted += (s, e) =>
             {
-                MessageBox.Show("查詢失敗:" + ex.Message, "資料比對", MessageBoxButton.OK, MessageBoxImage.Error);
+                StopQueryElapsedTimer();
+
+                if (e.Error != null)
+                {
+                    _ownerWindow.HideMask();
+                    MessageBox.Show("查詢失敗:" + e.Error.Message, "資料比對", MessageBoxButton.OK, MessageBoxImage.Error);
+                    UpdateUiEnabledState();
+                    StartQueryCooldown();
+                    return;
+                }
+
+                var table = (DataTable)e.Result;
+
+                // 查詢本身已經回來了,但把資料組成 DataGrid、排版顯示,是只能在 UI 執行緒上做的同步工作,
+                // 資料筆數/欄位一多一樣會讓畫面卡住一下。遮罩先切到「處理中」的忙碌狀態(不歸零、不倒數),
+                // 用 Dispatcher.BeginInvoke 延後到下一個畫面更新週期才真正開始組 DataGrid,
+                // 讓「處理中」這個狀態先被畫出來,而不是遮罩還沒換狀態、UI 就已經卡住看不到任何回饋。
+                _ownerWindow.SetMaskProcessingState();
+
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+                {
+                    AddResultDataGrid(table);
+                    _ownerWindow.HideMask();
+                    UpdateUiEnabledState();
+                    StartQueryCooldown();
+                }));
+            };
+            worker.RunWorkerAsync();
+        }
+
+        /// <summary>
+        /// 顯示查詢中的遮罩:黑色、透明度 0.3,中下方的 ProgressBar 依實際經過秒數往上跑
+        /// (Minimum 0、Maximum 對應逾時秒數)。查詢本身用 CommandTimeout 限制在同一個秒數內,
+        /// 逾時未完成 ADO.NET 會自己丟出例外,不會無限期卡住。
+        /// </summary>
+        /// <summary>
+        /// 顯示遮住「整個視窗」的 Loading Mask(遮罩實際畫在 DataComparisonWindow 上,
+        /// 這樣查詢/處理期間連分頁、登出按鈕都點不到,不會只擋住這個分頁自己的內容)。
+        /// </summary>
+        private void ShowQueryMask()
+        {
+            _queryElapsedSeconds = 0;
+            _ownerWindow.ShowMask();
+
+            _queryElapsedTimer = new DispatcherTimer();
+            _queryElapsedTimer.Interval = TimeSpan.FromSeconds(1);
+            _queryElapsedTimer.Tick += QueryElapsedTimer_Tick;
+            _queryElapsedTimer.Start();
+        }
+
+        private void QueryElapsedTimer_Tick(object sender, EventArgs e)
+        {
+            if (_queryElapsedSeconds >= QueryTimeoutSeconds)
+            {
+                return;
             }
 
-            UpdateUiEnabledState();
-            StartQueryCooldown();
+            _queryElapsedSeconds++;
+            _ownerWindow.UpdateMaskElapsedSeconds(_queryElapsedSeconds);
+        }
+
+        private void StopQueryElapsedTimer()
+        {
+            if (_queryElapsedTimer != null)
+            {
+                _queryElapsedTimer.Stop();
+                _queryElapsedTimer.Tick -= QueryElapsedTimer_Tick;
+                _queryElapsedTimer = null;
+            }
+        }
+
+        private void HideQueryMask()
+        {
+            StopQueryElapsedTimer();
+            _ownerWindow.HideMask();
         }
 
         private void AddResultDataGrid(DataTable table)
@@ -451,6 +607,7 @@ namespace DataComparison.Fragment
 
             CompIdTextBox.IsEnabled = enabled;
             SubCompIdTextBox.IsEnabled = enabled;
+            TopCountTextBox.IsEnabled = enabled;
             TableFilterTextBox.IsEnabled = enabled;
             TableListBox.IsEnabled = enabled;
             ColumnFilterTextBox.IsEnabled = enabled;
@@ -502,6 +659,13 @@ namespace DataComparison.Fragment
             public DataGrid Grid;
             public CheckBox CheckBox;
             public FrameworkElement Container;
+        }
+
+        private class ColumnLoadResult
+        {
+            public List<string> Columns;
+            public Dictionary<string, string> ColumnTypes;
+            public List<string> PrimaryKeyColumns;
         }
     }
 }

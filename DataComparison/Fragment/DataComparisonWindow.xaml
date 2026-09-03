@@ -3,14 +3,27 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="資料比對" Height="960" Width="1280"
         WindowStartupLocation="CenterScreen">
-    <DockPanel LastChildFill="True">
-        <Border DockPanel.Dock="Top" Background="#FFF0F0F0" BorderBrush="Gray" BorderThickness="0,0,0,1">
-            <DockPanel LastChildFill="True">
-                <Button x:Name="LogoutButton" Content="登出" DockPanel.Dock="Right"
-                        Width="70" Height="26" Margin="4" Click="LogoutButton_Click"/>
-                <StackPanel x:Name="TabStripPanel" Orientation="Horizontal" Margin="4,4,4,0"/>
-            </DockPanel>
-        </Border>
-        <Grid x:Name="TabContentHost" Background="White"/>
-    </DockPanel>
+    <Grid>
+        <DockPanel LastChildFill="True">
+            <Border DockPanel.Dock="Top" Background="#FFF0F0F0" BorderBrush="Gray" BorderThickness="0,0,0,1">
+                <DockPanel LastChildFill="True">
+                    <Button x:Name="LogoutButton" Content="登出" DockPanel.Dock="Right"
+                            Width="70" Height="26" Margin="4" Click="LogoutButton_Click"/>
+                    <StackPanel x:Name="TabStripPanel" Orientation="Horizontal" Margin="4,4,4,0"/>
+                </DockPanel>
+            </Border>
+            <Grid x:Name="TabContentHost" Background="White"/>
+        </DockPanel>
+
+        <Grid x:Name="WindowMaskOverlay" Visibility="Collapsed">
+            <Grid.Background>
+                <SolidColorBrush Color="#4D000000"/>
+            </Grid.Background>
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,120,0,0">
+                <ProgressBar x:Name="WindowMaskProgressBar" Width="240" Height="24" Minimum="0" Maximum="30"/>
+                <TextBlock x:Name="WindowMaskText" Text="0 秒" Foreground="White" FontWeight="Bold"
+                           HorizontalAlignment="Center" Margin="0,8,0,0"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
 </Window>

@@ -63,10 +63,45 @@ namespace DataComparison.Fragment
             Close();
         }
 
+        /// <summary>
+        /// 顯示遮住整個視窗的 Loading Mask(含分頁列與登出按鈕,查詢期間無法切分頁/登出),
+        /// 進度條從 0 開始,依 UpdateMaskElapsedSeconds 逐秒往上跑。
+        /// </summary>
+        public void ShowMask()
+        {
+            WindowMaskProgressBar.IsIndeterminate = false;
+            WindowMaskProgressBar.Value = 0;
+            WindowMaskText.Text = "0 秒";
+            WindowMaskOverlay.Visibility = Visibility.Visible;
+        }
+
+        public void UpdateMaskElapsedSeconds(int elapsedSeconds)
+        {
+            WindowMaskProgressBar.Value = elapsedSeconds;
+            WindowMaskText.Text = elapsedSeconds + " 秒";
+        }
+
+        /// <summary>
+        /// 資料庫查詢已經回來,但接下來要在畫面上組出 DataGrid 屬於 UI 執行緒上的同步工作,
+        /// 資料量大時一樣會讓畫面卡住一下——把遮罩切成不歸零、不顯示秒數的忙碌狀態,
+        /// 讓使用者知道還在處理,而不是誤以為遮罩消失卻整個視窗卡死。
+        /// </summary>
+        public void SetMaskProcessingState()
+        {
+            WindowMaskProgressBar.IsIndeterminate = true;
+            WindowMaskText.Text = "資料處理中,請稍候...";
+        }
+
+        public void HideMask()
+        {
+            WindowMaskOverlay.Visibility = Visibility.Collapsed;
+            WindowMaskProgressBar.IsIndeterminate = false;
+        }
+
         private void AddNewTab()
         {
             var entry = new TabEntry();
-            entry.Content = new ComparisonTabContent(_connectionInfo);
+            entry.Content = new ComparisonTabContent(_connectionInfo, this);
             entry.Content.SelectedTableChanged += (s, e) => UpdateTabTitle(entry);
 
             entry.TitleTextBlock = new TextBlock

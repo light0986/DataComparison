@@ -81,6 +81,31 @@ namespace DataComparison.SQLserver
             }
         }
 
+        /// <summary>
+        /// 跟 ExecuteQuery 相同,但可以指定這段查詢自己的逾時秒數(SqlCommand.CommandTimeout)。
+        /// 超過這個秒數還沒查完,ADO.NET 會自己中止並丟出逾時例外,不會無限期卡住。
+        /// </summary>
+        public DataTable ExecuteQueryWithTimeout(string sql, int commandTimeoutSeconds, params SqlParameter[] parameters)
+        {
+            Open();
+            using (var command = new SqlCommand(sql, _connection))
+            {
+                command.CommandTimeout = commandTimeoutSeconds;
+
+                if (parameters != null && parameters.Length > 0)
+                {
+                    command.Parameters.AddRange(parameters);
+                }
+
+                using (var adapter = new SqlDataAdapter(command))
+                {
+                    var table = new DataTable();
+                    adapter.Fill(table);
+                    return table;
+                }
+            }
+        }
+
         public int ExecuteNonQuery(string sql, params SqlParameter[] parameters)
         {
             Open();
